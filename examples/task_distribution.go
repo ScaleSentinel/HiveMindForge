@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"hivemindforge/agents"
-	"hivemindforge/agents/telemetry"
+	"HiveMind/agents"
+	"HiveMind/agents/telemetry"
 
 	"github.com/google/uuid"
 )

@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"HiveMindForge/agents/communication"
+	"HiveMind/agents/communication"
 )
 
 func main() {

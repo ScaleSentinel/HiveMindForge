@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"HiveMindForge/agents"
-	"HiveMindForge/agents/memory"
+	"HiveMind/agents"
+	"HiveMind/agents/memory"
 )
 
 func main() {

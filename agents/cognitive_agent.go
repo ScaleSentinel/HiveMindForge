@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"HiveMindForge/agents/memory"
+	"HiveMind/memory"
 )
 
 // CognitiveAgent representa um agente cognitivo que pode executar tarefas específicas

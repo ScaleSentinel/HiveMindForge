@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"HiveMindForge/agents"
-	"HiveMindForge/agents/memory"
+	"HiveMind/agents"
+	"HiveMind/agents/memory"
 )
 
 // MarketStrategy representa uma estratégia de marketing

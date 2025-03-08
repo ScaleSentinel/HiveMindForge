@@ -1,109 +1,134 @@
-# AIAgentsForge
+# Sistema de Análise com RouteLLM
 
-AIAgentsForge é uma plataforma para criação e gerenciamento de agentes cognitivos autônomos, com foco em tarefas específicas como marketing, análise de dados e geração de conteúdo.
+Este sistema implementa um orquestrador que utiliza o RouteLLM para quebrar tarefas em subtarefas e distribuí-las entre agents especializados.
 
-## Funcionalidades
+## Estrutura do Sistema
 
-- Sistema de memória híbrido (Redis + MongoDB) para armazenamento de curto e longo prazo
-- Agentes cognitivos especializados com diferentes papéis e objetivos
-- Configuração flexível via arquivos YAML
-- Ferramentas integradas para pesquisa, análise e criação de conteúdo
-- Sistema de tarefas com dependências e contexto
-- Monitoramento em tempo real do estado dos agentes
-
-## Requisitos
-
-- Go 1.21 ou superior
-- Redis 6.0 ou superior
-- MongoDB 4.4 ou superior
-- OpenTelemetry para métricas e tracing
-
-## Instalação
-
-1. Clone o repositório:
-```bash
-git clone https://github.com/seu-usuario/AIAgentsForge.git
-cd AIAgentsForge
+```
+HiveMind/
+├── agents/
+│   └── llm_agent.go       # Implementação dos agents
+├── config/
+│   └── rabbitmq.go        # Configuração do RabbitMQ
+├── orchestrator/
+│   ├── llm_router.go      # Implementação do router
+│   └── task_types.go      # Definição dos tipos de tarefas
+└── cmd/
+    └── main.go            # Arquivo principal
 ```
 
-2. Instale as dependências:
-```bash
-go mod tidy
-```
+## Componentes
 
-3. Configure as variáveis de ambiente:
-```bash
-export REDIS_URL="redis://localhost:6379"
-export MONGO_URL="mongodb://localhost:27017"
-export SERPER_API_KEY="sua-chave-api"
-```
+1. **LLMRouter**:
+   - Recebe tarefas via RabbitMQ
+   - Usa RouteLLM para quebrar em subtarefas
+   - Distribui subtarefas para os agents
+
+2. **LLMAgents**:
+   - 5 tipos diferentes de agents
+   - 2 instâncias de cada tipo (10 total)
+   - Processamento assíncrono
+   - Especialização por tipo de tarefa
+
+3. **Filas RabbitMQ**:
+   - `llm_input`: Recebe tarefas principais
+   - `llm_tasks`: Distribui subtarefas
+   - `llm_results`: Coleta resultados
+
+## Pré-requisitos
+
+1. Go 1.21 ou superior
+2. RabbitMQ 3.x
+3. Variáveis de ambiente configuradas
 
 ## Configuração
 
-O projeto usa arquivos YAML para configuração dos agentes, tarefas e ferramentas:
+1. Clone o repositório
+2. Copie `.env.example` para `.env`
+3. Configure as variáveis do RabbitMQ:
+   ```env
+   RABBITMQ_HOST=localhost
+   RABBITMQ_PORT=5672
+   RABBITMQ_USER=guest
+   RABBITMQ_PASSWORD=guest
+   ```
 
-- `config/agents.yaml`: Configuração dos agentes cognitivos
-- `config/tasks.yaml`: Configuração das tarefas e seus fluxos
-- `config/tools.yaml`: Configuração das ferramentas disponíveis
+## Instalação
+
+```bash
+# Instalar dependências
+go mod tidy
+
+# Compilar
+go build -o llm_system cmd/main.go
+```
 
 ## Uso
 
-### Marketing Posts
-
-O exemplo de Marketing Posts demonstra como criar uma campanha de marketing usando agentes cognitivos:
-
 ```bash
-cd examples/marketing
-go run main.go
+# Iniciar o sistema
+./llm_system
 ```
 
-O exemplo inclui:
-- Análise de mercado
-- Desenvolvimento de estratégia
-- Criação de campanha
-- Geração de conteúdo
+## Tipos de Agents
 
-### Estrutura do Projeto
+1. **Analysis Agent**:
+   - Análise de requisitos e contexto
+   - Prioridade: Alta
 
+2. **Research Agent**:
+   - Pesquisa e coleta de informações
+   - Prioridade: Alta
+
+3. **Development Agent**:
+   - Desenvolvimento da solução
+   - Prioridade: Alta
+
+4. **Validation Agent**:
+   - Validação e testes
+   - Prioridade: Média
+
+5. **Documentation Agent**:
+   - Documentação e relatórios
+   - Prioridade: Média
+
+## Exemplo de Tarefa
+
+```json
+{
+  "id": "uuid",
+  "description": "Analisar o repositório RouteLLM",
+  "parameters": {
+    "repository": "https://github.com/lm-sys/RouteLLM",
+    "priority": "high",
+    "context": "Análise técnica e funcional"
+  }
+}
 ```
-.
-├── agents/
-│   ├── cognitive_agent.go
-│   ├── base_agent.go
-│   ├── memory/
-│   │   ├── types.go
-│   │   └── manager.go
-│   └── marketing/
-│       ├── marketing_posts.go
-│       ├── config.go
-│       └── tools.go
-├── config/
-│   ├── agents.yaml
-│   ├── tasks.yaml
-│   └── tools.yaml
-└── examples/
-    ├── marketing/
-    │   └── main.go
-    └── memory/
-        └── main.go
-```
 
-## Desenvolvimento
+## Monitoramento
 
-Para contribuir com o projeto:
+O sistema usa logs com emojis para melhor visualização:
+- 🚀 Início de operações
+- 🤖 Atividade dos agents
+- 📥 Recebimento de tarefas
+- 🔄 Processamento
+- ✅ Conclusão
+- ❌ Erros
 
-1. Fork o repositório
-2. Crie uma branch para sua feature (`git checkout -b feature/nova-feature`)
-3. Commit suas mudanças (`git commit -am 'Adiciona nova feature'`)
-4. Push para a branch (`git push origin feature/nova-feature`)
-5. Crie um Pull Request
+## Graceful Shutdown
 
-## Licença
+O sistema suporta graceful shutdown com SIGINT/SIGTERM:
+1. Cancela o contexto principal
+2. Aguarda conclusão das tarefas em andamento
+3. Fecha conexões com RabbitMQ
+4. Encerra os agents ordenadamente
 
-Este projeto está licenciado sob a MIT License - veja o arquivo [LICENSE](LICENSE) para detalhes.
+## Extensões Possíveis
 
-## Contato
-
-- Email: seu-email@exemplo.com
-- Twitter: @seu-usuario
-- LinkedIn: linkedin.com/in/seu-usuario 
+1. Implementar integração real com RouteLLM
+2. Adicionar persistência de dados
+3. Implementar retry policies
+4. Adicionar métricas e monitoramento
+5. Implementar balanceamento de carga
+6. Adicionar testes automatizados

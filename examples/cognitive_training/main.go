@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"HiveMindForge/agents"
+	"HiveMind/agents"
 )
 
 func main() {

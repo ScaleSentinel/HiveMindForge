@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"HiveMindForge/agents"
-	"HiveMindForge/agents/memory"
+	"HiveMind/agents"
+	"HiveMind/agents/memory"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 	memConfig := &memory.MemoryConfig{
 		RedisURL:            "redis://localhost:4567", // Usando a porta 4567 para o Redis
 		MongoURL:            "mongodb://suissa:dc0b410b23dd26da2d423375437cceb4@195.35.19.148:27017/",
-		MongoDB:             "hivemind",
+		MongoDB:             "HiveMind",
 		Collection:          "memories",
 		ShortTermTTL:        1 * time.Hour,
 		ImportanceThreshold: 0.7,

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"HiveMindForge/agents/memory"
+	"HiveMind/agents/memory"
 )
 
 // TrainingProject contém os detalhes do projeto de treinamento

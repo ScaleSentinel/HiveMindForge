@@ -34,7 +34,7 @@ func NewNatsClient(config *ConnectionConfig) *NatsClient {
 // Connect estabelece a conexão com o servidor NATS
 func (nc *NatsClient) Connect(ctx context.Context) error {
 	opts := []nats.Option{
-		nats.Name("HiveMindForge NATS Client"),
+		nats.Name("HiveMind NATS Client"),
 		nats.ReconnectWait(time.Second * 5),
 		nats.MaxReconnects(-1),
 		nats.DisconnectHandler(func(_ *nats.Conn) {

@@ -3,7 +3,7 @@ package agents
 import (
 	"time"
 
-	"HiveMindForge/agents/memory"
+	"HiveMind/agents/memory"
 )
 
 // MarketingProject representa um projeto de marketing

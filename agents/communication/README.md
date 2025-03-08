@@ -1,6 +1,6 @@
 # Clientes de Comunicação
 
-Este pacote fornece implementações de clientes de comunicação para NATS e WebSocket, permitindo a troca de mensagens entre agentes do HiveMindForge.
+Este pacote fornece implementações de clientes de comunicação para NATS e WebSocket, permitindo a troca de mensagens entre agentes do HiveMind.
 
 ## Características
 
