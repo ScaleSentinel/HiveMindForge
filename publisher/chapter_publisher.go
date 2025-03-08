@@ -37,7 +37,7 @@ func PublishChapterRequest() {
 	// Declarar a fila
 	q, err := ch.QueueDeclare(
 		"chapter.creation.queue", // nome
-		false,                    // durable
+		true,                     // durable
 		false,                    // delete when unused
 		false,                    // exclusive
 		false,                    // no-wait

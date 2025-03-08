@@ -37,7 +37,7 @@ func publishChapterRequest() {
 	// Declarar a fila
 	q, err := ch.QueueDeclare(
 		"chapter.creation.queue", // nome
-		false,                    // durable
+		true,                     // durable
 		false,                    // delete when unused
 		false,                    // exclusive
 		false,                    // no-wait
@@ -74,6 +74,6 @@ func publishChapterRequest() {
 	log.Printf(" [x] Mensagem enviada com sucesso: %s", body)
 }
 
-func main() {
+func init() {
 	publishChapterRequest()
 }
