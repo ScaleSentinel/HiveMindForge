@@ -11,16 +11,18 @@ import (
 	"github.com/streadway/amqp"
 )
 
-// Constantes de escalabilidade
+// Thresholds para escalonamento
 const (
 	cpuThreshold    = 80.0 // 80% de uso de CPU
-	memoryThreshold = 85.0 // 85% de uso de memória
+	memoryThreshold = 80.0 // 80% de uso de memória
 	tasksThreshold  = 100  // 100 tarefas na fila
-	errorThreshold  = 0.05 // 5% de taxa de erro
-	cooldownPeriod  = 300  // 5 minutos de cooldown entre escalas
+	errorThreshold  = 5.0  // 5% de taxa de erro
+
+	// Período de cooldown entre escalonamentos (em segundos)
+	cooldownPeriod = 300 // 5 minutos
 )
 
-// Métricas que serão coletadas para cada agente
+// AgentMetrics representa as métricas de um agente
 type AgentMetrics struct {
 	AgentName    string  `json:"agent_name"`
 	CPU          float64 `json:"cpu_usage"`
@@ -31,7 +33,7 @@ type AgentMetrics struct {
 	LastUpdated  int64   `json:"last_updated"`
 }
 
-// SystemMetrics armazena métricas do sistema como um todo
+// SystemMetrics representa as métricas do sistema como um todo
 type SystemMetrics struct {
 	CPUUsage    float64 `json:"cpu_usage"`
 	MemoryUsage float64 `json:"memory_usage"`
@@ -39,9 +41,9 @@ type SystemMetrics struct {
 	ErrorRate   float64 `json:"error_rate"`
 }
 
-// ObserverInfrastructureAgent monitora as métricas dos agentes
+// ObserverInfrastructureAgent monitora e coleta métricas dos agentes
 type ObserverInfrastructureAgent struct {
-	Agent
+	*AgentStruct
 	metricsMap     map[string]*AgentMetrics
 	metricsMapLock sync.RWMutex
 	rabbitmqConn   *amqp.Connection
@@ -49,9 +51,9 @@ type ObserverInfrastructureAgent struct {
 	systemMetrics  *SystemMetrics
 }
 
-// OrchestratorInfrastructureAgent gerencia a infraestrutura e escalabilidade do sistema
+// OrchestratorInfrastructureAgent gerencia o escalonamento dos agentes
 type OrchestratorInfrastructureAgent struct {
-	Agent
+	*AgentStruct
 	instances     map[string][]*AgentInstance
 	instancesLock sync.RWMutex
 	rabbitmqConn  *amqp.Connection
@@ -60,9 +62,9 @@ type OrchestratorInfrastructureAgent struct {
 	metrics       *SystemMetrics
 }
 
-// AgentInstance representa uma instância de um agente em execução
+// AgentInstance representa uma instância de um agente
 type AgentInstance struct {
-	Agent      *Agent
+	Agent      *AgentStruct
 	LastScaled time.Time
 	Metrics    *AgentMetrics
 }
@@ -70,7 +72,7 @@ type AgentInstance struct {
 // NewObserverInfrastructureAgent cria uma nova instância do ObserverInfrastructureAgent
 func NewObserverInfrastructureAgent() *ObserverInfrastructureAgent {
 	agent := &ObserverInfrastructureAgent{
-		Agent: Agent{
+		AgentStruct: &AgentStruct{
 			Name:            "Observer Infrastructure Agent",
 			Role:            "Monitor de Infraestrutura",
 			Goal:            "Monitorar métricas de todos os agentes e publicar eventos de telemetria",
@@ -101,7 +103,7 @@ func NewObserverInfrastructureAgent() *ObserverInfrastructureAgent {
 // NewOrchestratorInfrastructureAgent cria uma nova instância do OrchestratorInfrastructureAgent
 func NewOrchestratorInfrastructureAgent() *OrchestratorInfrastructureAgent {
 	agent := &OrchestratorInfrastructureAgent{
-		Agent: Agent{
+		AgentStruct: &AgentStruct{
 			Name:            "Orchestrator Infrastructure Agent",
 			Role:            "Gerenciador de Infraestrutura",
 			Goal:            "Gerenciar a escalabilidade dinâmica dos agentes cognitivos",
@@ -131,13 +133,13 @@ func NewOrchestratorInfrastructureAgent() *OrchestratorInfrastructureAgent {
 }
 
 // StartMonitoring inicia o monitoramento dos agentes
-func (o *ObserverInfrastructureAgent) StartMonitoring(agents ...*Agent) {
+func (o *ObserverInfrastructureAgent) StartMonitoring(agents ...*AgentStruct) {
 	log.Printf("🔍 Iniciando monitoramento de %d agentes", len(agents))
 
 	// Inicializar métricas para cada agente
 	for _, agent := range agents {
-		o.metricsMap[agent.Name] = &AgentMetrics{
-			AgentName: agent.Name,
+		o.metricsMap[agent.GetName()] = &AgentMetrics{
+			AgentName: agent.GetName(),
 		}
 	}
 
@@ -278,18 +280,18 @@ func (o *ObserverInfrastructureAgent) GetSystemMetrics() *SystemMetrics {
 }
 
 // RegisterAgent registra um novo agente para monitoramento
-func (o *OrchestratorInfrastructureAgent) RegisterAgent(agent *Agent) {
+func (o *OrchestratorInfrastructureAgent) RegisterAgent(agent *AgentStruct) {
 	o.instancesLock.Lock()
 	defer o.instancesLock.Unlock()
 
 	instance := &AgentInstance{
 		Agent:      agent,
 		LastScaled: time.Now(),
-		Metrics:    &AgentMetrics{AgentName: agent.Name},
+		Metrics:    &AgentMetrics{AgentName: agent.GetName()},
 	}
 
-	o.instances[agent.Name] = append(o.instances[agent.Name], instance)
-	log.Printf("✅ Agente %s registrado para monitoramento", agent.Name)
+	o.instances[agent.GetName()] = append(o.instances[agent.GetName()], instance)
+	log.Printf("✅ Agente %s registrado para monitoramento", agent.GetName())
 }
 
 // CheckScaling verifica se é necessário escalar o sistema
@@ -323,32 +325,55 @@ func (o *OrchestratorInfrastructureAgent) ScaleSystem() error {
 	o.instancesLock.Lock()
 	defer o.instancesLock.Unlock()
 
-	for agentName, instances := range o.instances {
-		// Verificar se precisamos escalar este tipo de agente
-		if len(instances) == 0 {
-			continue
+	// Escalar cada tipo de agente
+	for agentType, instances := range o.instances {
+		// Verificar métricas do tipo de agente
+		var totalCPU float64
+		var totalMemory float64
+		var totalTasks int
+		var totalErrors float64
+		var instanceCount int
+
+		for _, instance := range instances {
+			metrics := instance.Metrics
+			totalCPU += metrics.CPU
+			totalMemory += float64(metrics.Memory)
+			totalTasks += metrics.TasksInQueue
+			totalErrors += metrics.ErrorRate
+			instanceCount++
 		}
 
-		// Criar uma nova instância baseada na primeira instância existente
-		baseInstance := instances[0]
-		newAgent := baseInstance.Agent.Clone()
+		// Calcular médias
+		avgCPU := totalCPU / float64(instanceCount)
+		avgMemory := totalMemory / float64(instanceCount)
+		avgTasks := float64(totalTasks) / float64(instanceCount)
+		avgErrors := totalErrors / float64(instanceCount)
 
-		instance := &AgentInstance{
-			Agent:      newAgent,
-			LastScaled: time.Now(),
-			Metrics:    &AgentMetrics{AgentName: newAgent.Name},
+		// Decidir se precisa escalar
+		if avgCPU > cpuThreshold ||
+			avgMemory > memoryThreshold ||
+			avgTasks > float64(tasksThreshold) ||
+			avgErrors > errorThreshold {
+			// Criar nova instância do agente
+			baseInstance := instances[0]
+			newAgent := baseInstance.Agent.Clone()
+
+			// Registrar nova instância
+			instance := &AgentInstance{
+				Agent:      newAgent,
+				LastScaled: time.Now(),
+				Metrics:    &AgentMetrics{AgentName: newAgent.GetName()},
+			}
+
+			o.instances[agentType] = append(o.instances[agentType], instance)
+			log.Printf("🔄 Escalando agente %s: nova instância criada", agentType)
 		}
-
-		o.instances[agentName] = append(o.instances[agentName], instance)
-		log.Printf("🔄 Nova instância do agente %s criada", agentName)
 	}
 
 	return nil
 }
 
-// Função auxiliar para obter uso de CPU (implementação simplificada)
+// getCPUUsage retorna o uso atual de CPU (simulado)
 func getCPUUsage() float64 {
-	// Implementar lógica real de coleta de CPU
-	// Por enquanto, retorna um valor aleatório entre 0 e 100
-	return float64(time.Now().UnixNano() % 100)
+	return 50.0 // Valor simulado de 50% de uso de CPU
 }

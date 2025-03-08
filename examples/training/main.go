@@ -2,86 +2,152 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"HiveMindForge/agents"
+	"HiveMindForge/agents/memory"
 )
 
 func main() {
-	// Cria configuração de treinamento
-	config := agents.TrainingConfig{
-		MaxRounds:       5,
-		TrainingTimeout: 2 * time.Second,
-		ValidationRatio: 0.2,
-		MinAccuracy:     0.8,
-		BatchSize:       32,
-		LearningRate:    0.001,
-		UseHistorical:   true,
+	ctx := context.Background()
+
+	// Configuração do gerenciador de memória
+	memConfig := &memory.MemoryConfig{
+		RedisURL:            "redis://localhost:4567",
+		MongoURL:            "mongodb://suissa:dc0b410b23dd26da2d423375437cceb4@195.35.19.148:27017/",
+		MongoDB:             "hivemind",
+		Collection:          "memories",
+		ShortTermTTL:        1 * time.Hour,
+		ImportanceThreshold: 0.7,
+		WeaviateURL:         "195.35.19.148:1111",
+		WeaviateClass:       "Memory",
+		WeaviateBatchSize:   100,
 	}
 
-	// Cria o gerenciador de treinamento
-	trainer := agents.NewAgentTrainer(config)
+	memManager, err := memory.NewHybridMemoryManager(ctx, memConfig)
+	if err != nil {
+		log.Fatalf("Erro ao criar gerenciador de memória: %v", err)
+	}
+	defer memManager.Close(ctx)
 
-	// Cria alguns agentes para teste
-	agent1 := agents.NewBaseAgent("agent1", "Agente 1", "Agente de teste 1", 3)
-	agent2 := agents.NewBaseAgent("agent2", "Agente 2", "Agente de teste 2", 5)
-	agent3 := agents.NewBaseAgent("agent3", "Agente 3", "Agente de teste 3", 4)
+	// Cria uma equipe de treinamento
+	crew := agents.NewTrainingCrew(memManager)
 
-	// Adiciona os agentes ao trainer
-	trainer.AddAgent(agent1)
-	trainer.AddAgent(agent2)
-	trainer.AddAgent(agent3)
+	// Registra listener para todos os eventos
+	crew.OnAnyEvent(func(event agents.Event) {
+		log.Printf("\n🔔 === NOVO EVENTO [%s] ===\n%s\n========================", event.Type, event.ToJSON())
+	})
 
-	// Cria contexto com timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Configura os agentes
+	trainingAgent := agents.NewCognitiveAgent(
+		"training-agent",
+		"Training Agent",
+		"Agente responsável por criar e gerenciar treinamentos",
+		100,
+		"gpt-4",
+		"training",
+		"Criar experiências de treinamento envolventes e eficazes",
+		memManager,
+	)
+	trainingAgent.SetBackstory("Sou um especialista em design instrucional e narrativas de aprendizado.")
 
-	// Executa o treinamento
-	fmt.Println("Iniciando treinamento dos agentes...")
-	if err := trainer.Train(ctx); err != nil {
-		log.Fatalf("Erro durante treinamento: %v", err)
+	chapterAgent := agents.NewCognitiveAgent(
+		"chapter-agent",
+		"Chapter Agent",
+		"Agente responsável por criar e gerenciar capítulos dos treinamentos",
+		100,
+		"gpt-4",
+		"chapter",
+		"Criar capítulos interativos e desafiadores",
+		memManager,
+	)
+	chapterAgent.SetBackstory("Sou especializado em criar conteúdo educacional estruturado e desafios envolventes.")
+
+	feedbackAgent := agents.NewCognitiveAgent(
+		"feedback-agent",
+		"Player Feedback Agent",
+		"Agente responsável por gerar feedback personalizado",
+		100,
+		"gpt-4",
+		"feedback",
+		"Fornecer feedback construtivo e personalizado",
+		memManager,
+	)
+	feedbackAgent.SetBackstory("Sou um analista especializado em avaliar desempenho e fornecer recomendações personalizadas.")
+
+	accountAgent := agents.NewCognitiveAgent(
+		"account-agent",
+		"Account Agent",
+		"Agente responsável por gerenciar dados da conta",
+		100,
+		"gpt-4",
+		"account",
+		"Otimizar a experiência de treinamento em nível organizacional",
+		memManager,
+	)
+	accountAgent.SetBackstory("Sou um estrategista focado em análise de dados e recomendações em nível organizacional.")
+
+	// Adiciona os agentes à equipe
+	crew.AddAgent(trainingAgent)
+	crew.AddAgent(chapterAgent)
+	crew.AddAgent(feedbackAgent)
+	crew.AddAgent(accountAgent)
+
+	// Define detalhes do projeto de treinamento
+	projectDetails := &agents.TrainingProject{
+		Name:        "Curso de Programação em Go",
+		Description: "Um curso interativo para ensinar programação em Go",
+		Objectives: []string{
+			"Entender os fundamentos da linguagem Go",
+			"Aprender boas práticas de programação",
+			"Desenvolver projetos práticos",
+		},
+		TargetAudience: []string{
+			"Desenvolvedores iniciantes",
+			"Programadores de outras linguagens",
+		},
+		Duration:   30 * 24 * time.Hour,
+		Difficulty: "Intermediário",
+		Prerequisites: []string{
+			"Conhecimento básico de programação",
+			"Familiaridade com linha de comando",
+		},
 	}
 
-	// Exibe métricas de cada agente
-	fmt.Println("\nMétricas de treinamento:")
-	metrics := trainer.GetAllMetrics()
-	for agent, metric := range metrics {
-		var baseAgent *agents.BaseAgent
-		switch a := agent.(type) {
-		case *agents.BaseAgent:
-			baseAgent = a
-		}
-
-		if baseAgent != nil {
-			fmt.Printf("\nAgente: %s\n", baseAgent.Name)
-			fmt.Printf("Rounds executados: %d/%d\n", metric.RoundsExecuted, baseAgent.GetMaxRounds())
-			fmt.Printf("Tempo de treinamento: %v\n", metric.EndTime.Sub(metric.StartTime))
-			if len(metric.Errors) > 0 {
-				fmt.Printf("Erros: %v\n", metric.Errors)
-			} else {
-				fmt.Println("Sem erros")
-			}
-		}
+	// Executa o workflow
+	results, err := crew.ExecuteWorkflow(projectDetails)
+	if err != nil {
+		log.Printf("Erro na execução do workflow: %v", err)
+	} else {
+		log.Printf("\nResultados do workflow:")
+		log.Printf("Treinamento: %s", results.Training)
+		log.Printf("Capítulos: %s", results.Chapters)
+		log.Printf("Feedback: %s", results.Feedback)
 	}
 
-	// Tenta salvar o estado dos agentes
-	fmt.Println("\nSalvando estado dos agentes...")
-	for agent := range metrics {
-		var baseAgent *agents.BaseAgent
-		switch a := agent.(type) {
-		case *agents.BaseAgent:
-			baseAgent = a
-		}
+	// Configura handler para sinais de término
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-		if baseAgent != nil {
-			path := fmt.Sprintf("agent_%s_state.json", baseAgent.ID)
-			if err := baseAgent.SaveState(path); err != nil {
-				fmt.Printf("Erro ao salvar estado do agente %s: %v\n", baseAgent.Name, err)
-			} else {
-				fmt.Printf("Estado do agente %s salvo em %s\n", baseAgent.Name, path)
-			}
+	// Monitora o projeto
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			status := crew.GetProjectStatus()
+			log.Printf("\nStatus do projeto:")
+			log.Printf("Progresso: %.2f%%", status.Progress)
+			log.Printf("Tarefas completadas: %d/%d", status.CompletedTasks, status.TotalTasks)
+
+		case sig := <-sigChan:
+			log.Printf("Recebido sinal %v, encerrando...", sig)
+			return
 		}
 	}
 }

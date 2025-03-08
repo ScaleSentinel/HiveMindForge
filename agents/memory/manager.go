@@ -2,236 +2,130 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"time"
-
-	"github.com/go-redis/redis/v8"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// HybridMemoryManager implementa a interface MemoryManager usando Redis e MongoDB
+// HybridMemoryManager combina Redis (curto prazo), MongoDB (longo prazo) e Weaviate (semântica)
 type HybridMemoryManager struct {
-	config      *MemoryConfig
-	redisClient *redis.Client
-	mongoClient *mongo.Client
-	collection  *mongo.Collection
+	shortTerm *RedisMemoryManager
+	longTerm  *MongoMemoryManager
+	semantic  *SemanticMemoryManager
+	config    *MemoryConfig
 }
 
-// NewHybridMemoryManager cria uma nova instância do gerenciador de memória híbrido
+// NewHybridMemoryManager cria um novo gerenciador de memória híbrido
 func NewHybridMemoryManager(ctx context.Context, config *MemoryConfig) (*HybridMemoryManager, error) {
-	// Conecta ao Redis
-	opt, err := redis.ParseURL(config.RedisURL)
+	// Inicializa Redis para memória de curto prazo
+	shortTerm, err := NewRedisMemoryManager(config.RedisURL)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao parsear URL do Redis: %v", err)
-	}
-	redisClient := redis.NewClient(opt)
-
-	// Testa conexão com Redis
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("erro ao conectar ao Redis: %v", err)
+		return nil, fmt.Errorf("erro ao inicializar Redis: %v", err)
 	}
 
-	// Conecta ao MongoDB
-	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(config.MongoURL))
+	// Inicializa MongoDB para memória de longo prazo
+	longTerm, err := NewMongoMemoryManager(ctx, config.MongoURL, config.MongoDB, config.Collection)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao conectar ao MongoDB: %v", err)
+		return nil, fmt.Errorf("erro ao inicializar MongoDB: %v", err)
 	}
 
-	// Testa conexão com MongoDB
-	if err := mongoClient.Ping(ctx, nil); err != nil {
-		return nil, fmt.Errorf("erro ao conectar ao MongoDB: %v", err)
-	}
-
-	collection := mongoClient.Database(config.MongoDB).Collection(config.Collection)
-
-	// Cria índices no MongoDB
-	indexes := []mongo.IndexModel{
-		{
-			Keys: bson.D{
-				{Key: "agent_id", Value: 1},
-				{Key: "type", Value: 1},
-			},
-		},
-		{
-			Keys: bson.D{
-				{Key: "tags", Value: 1},
-			},
-		},
-		{
-			Keys: bson.D{
-				{Key: "created_at", Value: 1},
-			},
-		},
-	}
-
-	if _, err := collection.Indexes().CreateMany(ctx, indexes); err != nil {
-		return nil, fmt.Errorf("erro ao criar índices no MongoDB: %v", err)
+	// Inicializa Weaviate para memória semântica
+	semantic, err := NewSemanticMemoryManager(&SemanticMemoryConfig{
+		WeaviateURL: config.WeaviateURL,
+		APIKey:      config.WeaviateAPIKey,
+		Class:       config.WeaviateClass,
+		BatchSize:   config.WeaviateBatchSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("erro ao inicializar Weaviate: %v", err)
 	}
 
 	return &HybridMemoryManager{
-		config:      config,
-		redisClient: redisClient,
-		mongoClient: mongoClient,
-		collection:  collection,
+		shortTerm: shortTerm,
+		longTerm:  longTerm,
+		semantic:  semantic,
+		config:    config,
 	}, nil
 }
 
-// Close fecha as conexões com Redis e MongoDB
-func (m *HybridMemoryManager) Close(ctx context.Context) error {
-	if err := m.redisClient.Close(); err != nil {
-		return fmt.Errorf("erro ao fechar conexão com Redis: %v", err)
-	}
-
-	if err := m.mongoClient.Disconnect(ctx); err != nil {
-		return fmt.Errorf("erro ao fechar conexão com MongoDB: %v", err)
-	}
-
-	return nil
-}
-
-// StoreMemory armazena uma memória no Redis (curto prazo) ou MongoDB (longo prazo)
+// StoreMemory armazena uma memória no sistema apropriado
 func (m *HybridMemoryManager) StoreMemory(ctx context.Context, memory *Memory) error {
-	memory.CreatedAt = time.Now()
+	// Armazena na memória semântica para busca por similaridade
+	if err := m.semantic.StoreMemory(ctx, memory); err != nil {
+		return fmt.Errorf("erro ao armazenar na memória semântica: %v", err)
+	}
 
-	if memory.Type == ShortTerm {
-		// Armazena no Redis com TTL
-		data, err := json.Marshal(memory)
-		if err != nil {
-			return fmt.Errorf("erro ao serializar memória: %v", err)
-		}
-
-		key := fmt.Sprintf("memory:%s:%s", memory.AgentID, memory.ID)
-		ttl := memory.TTL
-		if ttl == 0 {
-			ttl = m.config.ShortTermTTL
-		}
-
-		if err := m.redisClient.Set(ctx, key, data, ttl).Err(); err != nil {
-			return fmt.Errorf("erro ao armazenar memória no Redis: %v", err)
+	// Decide onde armazenar com base na importância
+	if memory.Importance >= m.config.ImportanceThreshold {
+		// Memória importante vai para o armazenamento de longo prazo
+		if err := m.longTerm.StoreMemory(ctx, memory); err != nil {
+			return fmt.Errorf("erro ao armazenar na memória de longo prazo: %v", err)
 		}
 	} else {
-		// Armazena no MongoDB
-		if _, err := m.collection.InsertOne(ctx, memory); err != nil {
-			return fmt.Errorf("erro ao armazenar memória no MongoDB: %v", err)
+		// Memória menos importante vai para o armazenamento de curto prazo
+		if err := m.shortTerm.StoreMemory(ctx, memory); err != nil {
+			return fmt.Errorf("erro ao armazenar na memória de curto prazo: %v", err)
 		}
 	}
 
 	return nil
 }
 
-// GetMemory recupera uma memória do Redis ou MongoDB
+// GetMemory recupera uma memória específica
 func (m *HybridMemoryManager) GetMemory(ctx context.Context, agentID, memoryID string) (*Memory, error) {
-	// Tenta primeiro no Redis
-	key := fmt.Sprintf("memory:%s:%s", agentID, memoryID)
-	data, err := m.redisClient.Get(ctx, key).Bytes()
+	// Tenta primeiro na memória de curto prazo
+	memory, err := m.shortTerm.GetMemory(ctx, agentID, memoryID)
 	if err == nil {
-		var memory Memory
-		if err := json.Unmarshal(data, &memory); err != nil {
-			return nil, fmt.Errorf("erro ao deserializar memória do Redis: %v", err)
-		}
-		return &memory, nil
+		return memory, nil
 	}
 
-	// Se não encontrou no Redis, busca no MongoDB
-	filter := bson.M{"agent_id": agentID, "_id": memoryID}
-	var memory Memory
-	if err := m.collection.FindOne(ctx, filter).Decode(&memory); err != nil {
-		if err == mongo.ErrNoDocuments {
-			return nil, fmt.Errorf("memória não encontrada")
-		}
-		return nil, fmt.Errorf("erro ao buscar memória no MongoDB: %v", err)
+	// Se não encontrou, tenta na memória de longo prazo
+	memory, err = m.longTerm.GetMemory(ctx, agentID, memoryID)
+	if err == nil {
+		return memory, nil
 	}
 
-	return &memory, nil
+	return nil, fmt.Errorf("memória não encontrada")
 }
 
-// SearchMemories busca memórias por tags no Redis e MongoDB
+// SearchMemories busca memórias por tags
 func (m *HybridMemoryManager) SearchMemories(ctx context.Context, agentID string, tags []string) ([]*Memory, error) {
-	var memories []*Memory
+	var allMemories []*Memory
 
-	// Busca no Redis
-	pattern := fmt.Sprintf("memory:%s:*", agentID)
-	iter := m.redisClient.Scan(ctx, 0, pattern, 0).Iterator()
-	for iter.Next(ctx) {
-		data, err := m.redisClient.Get(ctx, iter.Val()).Bytes()
-		if err != nil {
-			continue
-		}
+	// Busca em todas as camadas
+	shortTermMemories, _ := m.shortTerm.SearchMemories(ctx, agentID, tags)
+	longTermMemories, _ := m.longTerm.SearchMemories(ctx, agentID, tags)
 
-		var memory Memory
-		if err := json.Unmarshal(data, &memory); err != nil {
-			continue
-		}
+	// Combina os resultados
+	allMemories = append(allMemories, shortTermMemories...)
+	allMemories = append(allMemories, longTermMemories...)
 
-		// Verifica se a memória tem todas as tags buscadas
-		hasAllTags := true
-		for _, tag := range tags {
-			found := false
-			for _, memTag := range memory.Tags {
-				if memTag == tag {
-					found = true
-					break
-				}
-			}
-			if !found {
-				hasAllTags = false
-				break
-			}
-		}
-
-		if hasAllTags {
-			memories = append(memories, &memory)
-		}
-	}
-
-	// Busca no MongoDB
-	filter := bson.M{
-		"agent_id": agentID,
-		"tags":     bson.M{"$all": tags},
-	}
-	cursor, err := m.collection.Find(ctx, filter)
-	if err != nil {
-		return memories, fmt.Errorf("erro ao buscar memórias no MongoDB: %v", err)
-	}
-	defer cursor.Close(ctx)
-
-	for cursor.Next(ctx) {
-		var memory Memory
-		if err := cursor.Decode(&memory); err != nil {
-			continue
-		}
-		memories = append(memories, &memory)
-	}
-
-	return memories, nil
+	return allMemories, nil
 }
 
-// ConsolidateMemories move memórias importantes de curto prazo para longo prazo
+// SearchSimilarMemories busca memórias semanticamente similares
+func (m *HybridMemoryManager) SearchSimilarMemories(ctx context.Context, query string, limit int) ([]*Memory, error) {
+	return m.semantic.SearchSimilarMemories(ctx, query, limit)
+}
+
+// ConsolidateMemories move memórias importantes para o armazenamento de longo prazo
 func (m *HybridMemoryManager) ConsolidateMemories(ctx context.Context, agentID string) error {
-	pattern := fmt.Sprintf("memory:%s:*", agentID)
-	iter := m.redisClient.Scan(ctx, 0, pattern, 0).Iterator()
+	// Busca todas as memórias de curto prazo
+	memories, err := m.shortTerm.SearchMemories(ctx, agentID, []string{})
+	if err != nil {
+		return fmt.Errorf("erro ao buscar memórias para consolidação: %v", err)
+	}
 
-	for iter.Next(ctx) {
-		data, err := m.redisClient.Get(ctx, iter.Val()).Bytes()
-		if err != nil {
-			continue
-		}
-
-		var memory Memory
-		if err := json.Unmarshal(data, &memory); err != nil {
-			continue
-		}
-
-		// Se a memória é importante o suficiente, move para longo prazo
+	// Avalia cada memória
+	for _, memory := range memories {
 		if memory.Importance >= m.config.ImportanceThreshold {
-			memory.Type = LongTerm
-			if err := m.StoreMemory(ctx, &memory); err != nil {
-				continue
+			// Move para memória de longo prazo
+			if err := m.longTerm.StoreMemory(ctx, memory); err != nil {
+				return fmt.Errorf("erro ao consolidar memória: %v", err)
 			}
-			m.redisClient.Del(ctx, iter.Val())
+
+			// Remove da memória de curto prazo
+			if err := m.shortTerm.DeleteMemory(ctx, agentID, memory.ID); err != nil {
+				return fmt.Errorf("erro ao remover memória consolidada: %v", err)
+			}
 		}
 	}
 
@@ -240,36 +134,40 @@ func (m *HybridMemoryManager) ConsolidateMemories(ctx context.Context, agentID s
 
 // PruneMemories remove memórias antigas ou irrelevantes
 func (m *HybridMemoryManager) PruneMemories(ctx context.Context, agentID string) error {
-	// Remove memórias antigas do MongoDB
-	threshold := time.Now().Add(-30 * 24 * time.Hour) // 30 dias
-	filter := bson.M{
-		"agent_id":   agentID,
-		"created_at": bson.M{"$lt": threshold},
-		"importance": bson.M{"$lt": m.config.ImportanceThreshold},
+	// Remove memórias antigas da memória de curto prazo
+	if err := m.shortTerm.PruneMemories(ctx, agentID); err != nil {
+		return fmt.Errorf("erro ao limpar memórias de curto prazo: %v", err)
 	}
 
-	if _, err := m.collection.DeleteMany(ctx, filter); err != nil {
-		return fmt.Errorf("erro ao remover memórias antigas do MongoDB: %v", err)
+	// Remove memórias pouco importantes da memória de longo prazo
+	if err := m.longTerm.PruneMemories(ctx, agentID); err != nil {
+		return fmt.Errorf("erro ao limpar memórias de longo prazo: %v", err)
 	}
 
 	return nil
 }
 
-// DeleteMemory remove uma memória específica
+// DeleteMemory remove uma memória de todos os sistemas de armazenamento
 func (m *HybridMemoryManager) DeleteMemory(ctx context.Context, agentID, memoryID string) error {
-	// Remove do Redis
-	key := fmt.Sprintf("memory:%s:%s", agentID, memoryID)
-	if err := m.redisClient.Del(ctx, key).Err(); err != nil && err != redis.Nil {
-		return fmt.Errorf("erro ao remover memória do Redis: %v", err)
+	var errors []error
+
+	// Remove da memória semântica
+	if err := m.semantic.DeleteMemory(ctx, memoryID); err != nil {
+		errors = append(errors, fmt.Errorf("erro ao remover da memória semântica: %v", err))
 	}
 
-	// Remove do MongoDB
-	filter := bson.M{
-		"agent_id": agentID,
-		"_id":      memoryID,
+	// Remove da memória de curto prazo
+	if err := m.shortTerm.DeleteMemory(ctx, agentID, memoryID); err != nil {
+		errors = append(errors, fmt.Errorf("erro ao remover da memória de curto prazo: %v", err))
 	}
-	if _, err := m.collection.DeleteOne(ctx, filter); err != nil {
-		return fmt.Errorf("erro ao remover memória do MongoDB: %v", err)
+
+	// Remove da memória de longo prazo
+	if err := m.longTerm.DeleteMemory(ctx, agentID, memoryID); err != nil {
+		errors = append(errors, fmt.Errorf("erro ao remover da memória de longo prazo: %v", err))
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("erros ao remover memória: %v", errors)
 	}
 
 	return nil
@@ -277,33 +175,45 @@ func (m *HybridMemoryManager) DeleteMemory(ctx context.Context, agentID, memoryI
 
 // UpdateMemory atualiza uma memória existente
 func (m *HybridMemoryManager) UpdateMemory(ctx context.Context, memory *Memory) error {
-	// Atualiza no Redis se for memória de curto prazo
-	if memory.Type == ShortTerm {
-		data, err := json.Marshal(memory)
-		if err != nil {
-			return fmt.Errorf("erro ao serializar memória: %v", err)
-		}
+	// Atualiza na memória semântica
+	if err := m.semantic.UpdateMemory(ctx, memory); err != nil {
+		return fmt.Errorf("erro ao atualizar na memória semântica: %v", err)
+	}
 
-		key := fmt.Sprintf("memory:%s:%s", memory.AgentID, memory.ID)
-		ttl := memory.TTL
-		if ttl == 0 {
-			ttl = m.config.ShortTermTTL
-		}
-
-		if err := m.redisClient.Set(ctx, key, data, ttl).Err(); err != nil {
-			return fmt.Errorf("erro ao atualizar memória no Redis: %v", err)
+	// Decide onde atualizar com base na importância
+	if memory.Importance >= m.config.ImportanceThreshold {
+		// Memória importante vai para o armazenamento de longo prazo
+		if err := m.longTerm.UpdateMemory(ctx, memory); err != nil {
+			return fmt.Errorf("erro ao atualizar na memória de longo prazo: %v", err)
 		}
 	} else {
-		// Atualiza no MongoDB
-		filter := bson.M{
-			"agent_id": memory.AgentID,
-			"_id":      memory.ID,
+		// Memória menos importante vai para o armazenamento de curto prazo
+		if err := m.shortTerm.UpdateMemory(ctx, memory); err != nil {
+			return fmt.Errorf("erro ao atualizar na memória de curto prazo: %v", err)
 		}
-		update := bson.M{"$set": memory}
+	}
 
-		if _, err := m.collection.UpdateOne(ctx, filter, update); err != nil {
-			return fmt.Errorf("erro ao atualizar memória no MongoDB: %v", err)
-		}
+	return nil
+}
+
+// Close fecha todas as conexões
+func (m *HybridMemoryManager) Close(ctx context.Context) error {
+	var errors []error
+
+	if err := m.shortTerm.Close(ctx); err != nil {
+		errors = append(errors, fmt.Errorf("erro ao fechar Redis: %v", err))
+	}
+
+	if err := m.longTerm.Close(ctx); err != nil {
+		errors = append(errors, fmt.Errorf("erro ao fechar MongoDB: %v", err))
+	}
+
+	if err := m.semantic.Close(ctx); err != nil {
+		errors = append(errors, fmt.Errorf("erro ao fechar Weaviate: %v", err))
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("erros ao fechar conexões: %v", errors)
 	}
 
 	return nil

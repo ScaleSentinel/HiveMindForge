@@ -9,129 +9,251 @@ import (
 	"syscall"
 	"time"
 
-	"HiveMindForge/agents/marketing"
+	"HiveMindForge/agents"
 	"HiveMindForge/agents/memory"
 )
 
 func main() {
 	ctx := context.Background()
 
-	// Obtém o diretório base do projeto
+	// Obtém o diretório base
 	baseDir, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("Erro ao obter diretório atual: %v", err)
 	}
 
-	// Carrega as configurações
-	agentsConfig, err := marketing.LoadAgentsConfig(filepath.Join(baseDir, "config", "agents.yaml"))
+	// Carrega configurações
+	agentsConfig, err := agents.LoadAgentsConfig(filepath.Join(baseDir, "config", "agents.yaml"))
 	if err != nil {
 		log.Fatalf("Erro ao carregar configuração dos agentes: %v", err)
 	}
 
-	tasksConfig, err := marketing.LoadTasksConfig(filepath.Join(baseDir, "config", "tasks.yaml"))
+	tasksConfig, err := agents.LoadTasksConfig(filepath.Join(baseDir, "config", "tasks.yaml"))
 	if err != nil {
 		log.Fatalf("Erro ao carregar configuração das tarefas: %v", err)
 	}
 
-	toolsConfig, err := marketing.LoadToolsConfig(filepath.Join(baseDir, "config", "tools.yaml"))
+	toolsConfig, err := agents.LoadToolsConfig(filepath.Join(baseDir, "config", "tools.yaml"))
 	if err != nil {
 		log.Fatalf("Erro ao carregar configuração das ferramentas: %v", err)
 	}
 
 	// Configuração do gerenciador de memória
-	memConfig := memory.DefaultMemoryConfig()
+	memConfig := &memory.MemoryConfig{
+		RedisURL:            "redis://localhost:4567", // Usando a porta 4567 para o Redis
+		MongoURL:            "mongodb://suissa:dc0b410b23dd26da2d423375437cceb4@195.35.19.148:27017/",
+		MongoDB:             "hivemind",
+		Collection:          "memories",
+		ShortTermTTL:        1 * time.Hour,
+		ImportanceThreshold: 0.7,
+		WeaviateURL:         "195.35.19.148:1111",
+		WeaviateClass:       "Memory",
+		WeaviateBatchSize:   100,
+	}
+
 	memManager, err := memory.NewHybridMemoryManager(ctx, memConfig)
 	if err != nil {
 		log.Fatalf("Erro ao criar gerenciador de memória: %v", err)
 	}
 	defer memManager.Close(ctx)
 
-	// Exibe configuração dos agentes
-	log.Printf("\nAgentes configurados:")
-	log.Printf("- Analista: %s (%s)", agentsConfig.LeadMarketAnalyst.Name, agentsConfig.LeadMarketAnalyst.Role)
-	log.Printf("  - Objetivo: %s", agentsConfig.LeadMarketAnalyst.Goal)
-	log.Printf("  - História: %s", agentsConfig.LeadMarketAnalyst.Backstory)
-	log.Printf("- Estrategista: %s (%s)", agentsConfig.ChiefMarketingStrategist.Name, agentsConfig.ChiefMarketingStrategist.Role)
-	log.Printf("  - Objetivo: %s", agentsConfig.ChiefMarketingStrategist.Goal)
-	log.Printf("  - História: %s", agentsConfig.ChiefMarketingStrategist.Backstory)
-	log.Printf("- Criador: %s (%s)", agentsConfig.CreativeContentCreator.Name, agentsConfig.CreativeContentCreator.Role)
-	log.Printf("  - Objetivo: %s", agentsConfig.CreativeContentCreator.Goal)
-	log.Printf("  - História: %s", agentsConfig.CreativeContentCreator.Backstory)
+	// Cria uma equipe de marketing
+	crew := agents.NewMarketingCrew(memManager)
 
-	// Cria a equipe de marketing
-	crew := marketing.NewMarketingPostsCrew(ctx, memManager)
+	// Registra listener para todos os eventos
+	crew.OnAnyEvent(func(event agents.Event) {
+		log.Printf("\n🔔 === NOVO EVENTO [%s] ===\n%s\n========================", event.Type, event.ToJSON())
+	})
 
-	// Define os detalhes do projeto
-	projectDetails := map[string]interface{}{
-		"name":        "Campanha de Marketing Digital",
-		"objective":   "Aumentar engajamento nas redes sociais",
-		"target":      "Profissionais de marketing digital",
-		"budget":      50000,
-		"duration":    "3 meses",
-		"channels":    []string{"LinkedIn", "Twitter", "Email"},
-		"constraints": []string{"ROI positivo em 6 meses", "Foco em conteúdo educativo"},
-		"tasks": map[string]interface{}{
-			"research":      tasksConfig.ResearchTask,
-			"understanding": tasksConfig.ProjectUnderstandingTask,
-			"strategy":      tasksConfig.MarketingStrategyTask,
-			"campaign":      tasksConfig.CampaignIdeaTask,
-			"copy":          tasksConfig.CopyCreationTask,
+	// Registra listeners específicos para cada tipo de evento
+	crew.OnEvent(agents.EventAgentAction, func(event agents.Event) {
+		if event.Data["action"] == "add_agent" {
+			log.Printf("\n👤 AGENTE: Novo agente adicionado")
+			log.Printf("Nome: %s", event.Data["agent_name"])
+			log.Printf("Função: %s", event.Data["agent_role"])
+			log.Printf("ID: %s", event.Data["agent_id"])
+		}
+	})
+
+	crew.OnEvent(agents.EventTaskUpdate, func(event agents.Event) {
+		action := event.Data["action"].(string)
+		taskName := event.Data["task_name"].(string)
+		assignedTo := event.Data["assigned_to"].(string)
+
+		switch action {
+		case "task_start":
+			log.Printf("\n▶️ TAREFA: Iniciando")
+			log.Printf("Nome: %s", taskName)
+			log.Printf("Responsável: %s", assignedTo)
+			if deadline, ok := event.Data["deadline"]; ok {
+				log.Printf("Prazo: %s", deadline)
+			}
+		case "task_complete":
+			log.Printf("\n✅ TAREFA: Concluída")
+			log.Printf("Nome: %s", taskName)
+			log.Printf("Responsável: %s", assignedTo)
+			if duration, ok := event.Data["duration"]; ok {
+				log.Printf("Duração: %s", duration)
+			}
+		}
+	})
+
+	crew.OnEvent(agents.EventWorkflowUpdate, func(event agents.Event) {
+		action := event.Data["action"].(string)
+		switch action {
+		case "workflow_start":
+			log.Printf("\n🚀 WORKFLOW: Iniciando")
+			log.Printf("Projeto: %s", event.Data["project"])
+			log.Printf("Objetivo: %s", event.Data["objective"])
+			log.Printf("Timestamp: %s", event.Timestamp.Format(time.RFC3339))
+		case "workflow_complete":
+			log.Printf("\n🏁 WORKFLOW: Concluído")
+			log.Printf("Duração: %s", event.Data["duration"])
+			if results, ok := event.Data["results"].(map[string]interface{}); ok {
+				log.Printf("\nResultados:")
+				for k, v := range results {
+					log.Printf("- %s: %v", k, v)
+				}
+			}
+		}
+	})
+
+	crew.OnEvent(agents.EventProjectUpdate, func(event agents.Event) {
+		if event.Data["action"] == "status_update" {
+			log.Printf("\n📊 PROJETO: Atualização de Status")
+			log.Printf("Progresso: %.2f%%", event.Data["progress"])
+			log.Printf("Tarefas: %d/%d", event.Data["completed_tasks"], event.Data["total_tasks"])
+			log.Printf("Tempo decorrido: %s", event.Data["elapsed_time"])
+			log.Printf("Tempo restante: %s", event.Data["remaining_time"])
+			if metrics, ok := event.Data["metrics"].(map[string]interface{}); ok {
+				log.Printf("\nMétricas:")
+				for k, v := range metrics {
+					log.Printf("- %s: %v", k, v)
+				}
+			}
+		}
+	})
+
+	crew.OnEvent(agents.EventMemoryOperation, func(event agents.Event) {
+		action := event.Data["action"].(string)
+		switch action {
+		case "store":
+			log.Printf("\n💾 MEMÓRIA: Armazenamento")
+			log.Printf("Conteúdo: %s", event.Data["content"])
+			if tags, ok := event.Data["tags"].([]string); ok {
+				log.Printf("Tags: %v", tags)
+			}
+			if importance, ok := event.Data["importance"].(float64); ok {
+				log.Printf("Importância: %.2f", importance)
+			}
+		case "retrieve":
+			log.Printf("\n📖 MEMÓRIA: Recuperação")
+			log.Printf("Conteúdo: %s", event.Data["content"])
+			if memoryId, ok := event.Data["memory_id"].(string); ok {
+				log.Printf("ID: %s", memoryId)
+			}
+		case "search":
+			log.Printf("\n🔍 MEMÓRIA: Busca")
+			log.Printf("Query: %s", event.Data["query"])
+			if results, ok := event.Data["results"].([]interface{}); ok {
+				log.Printf("Encontradas %d memórias similares", len(results))
+				for i, result := range results {
+					if memory, ok := result.(map[string]interface{}); ok {
+						log.Printf("\nMemória #%d:", i+1)
+						log.Printf("- Conteúdo: %s", memory["content"])
+						log.Printf("- Similaridade: %.2f", memory["similarity"])
+						if tags, ok := memory["tags"].([]string); ok {
+							log.Printf("- Tags: %v", tags)
+						}
+					}
+				}
+			}
+		}
+	})
+
+	// Configura os agentes
+	for _, agentConfig := range agentsConfig.Agents {
+		log.Printf("Configurando agente: %s (%s)", agentConfig.Name, agentConfig.Role)
+		log.Printf("Objetivo: %s", agentConfig.Goal)
+		log.Printf("Backstory: %s\n", agentConfig.Backstory)
+
+		agent := agents.NewCognitiveAgent(
+			agentConfig.ID,
+			agentConfig.Name,
+			agentConfig.Description,
+			agentConfig.MaxRounds,
+			agentConfig.Model,
+			agentConfig.Role,
+			agentConfig.Goal,
+			memManager,
+		)
+
+		agent.SetBackstory(agentConfig.Backstory)
+		crew.AddAgent(agent)
+	}
+
+	// Define detalhes do projeto
+	projectDetails := &agents.MarketingProject{
+		Name:      "Campanha de Lançamento de Produto",
+		Objective: "Lançar novo produto no mercado com foco em sustentabilidade",
+		TargetAudience: []string{
+			"Consumidores conscientes",
+			"Faixa etária 25-45 anos",
+			"Classe A/B",
 		},
-		"tools": map[string]interface{}{
-			"research": toolsConfig.GetToolsByCategory("research"),
-			"planning": toolsConfig.GetToolsByCategory("planning"),
-			"creative": toolsConfig.GetToolsByCategory("creative"),
-			"analysis": toolsConfig.GetToolsByCategory("analysis"),
+		Budget:   100000.0,
+		Duration: 90 * 24 * time.Hour,
+		Channels: []string{"Social Media", "Content Marketing", "Influencer Marketing"},
+		Constraints: []string{
+			"Orçamento limitado",
+			"Timeline agressivo",
+			"Foco em sustentabilidade",
 		},
 	}
 
-	// Exibe as ferramentas disponíveis
-	log.Printf("\nFerramentas disponíveis por categoria:")
-	categories := []string{"research", "planning", "creative", "analysis"}
-	for _, category := range categories {
-		tools := toolsConfig.GetToolsByCategory(category)
-		log.Printf("\n%s:", category)
+	// Mapeia tarefas do projeto
+	for _, taskConfig := range tasksConfig.Tasks {
+		projectDetails.AddTask(taskConfig)
+	}
+
+	// Registra ferramentas disponíveis por categoria
+	log.Println("\nFerramentas disponíveis:")
+	for category, tools := range toolsConfig.Tools {
+		log.Printf("\nCategoria: %s", category)
 		for _, tool := range tools {
 			log.Printf("- %s: %s", tool.Name, tool.Description)
 		}
 	}
 
-	// Executa o fluxo de trabalho
-	result, err := crew.ExecuteWorkflow(projectDetails)
+	// Executa o workflow
+	results, err := crew.ExecuteWorkflow(projectDetails)
 	if err != nil {
-		log.Fatalf("Erro ao executar workflow: %v", err)
+		log.Printf("Erro na execução do workflow: %v", err)
+	} else {
+		log.Printf("\nResultados do workflow:")
+		log.Printf("Estratégia: %s", results.Strategy)
+		log.Printf("Campanha: %s", results.Campaign)
+		log.Printf("Copy: %s", results.Copy)
 	}
 
-	// Exibe os resultados
-	log.Printf("\nResultados do workflow:\n%s", result)
-
-	// Aguarda sinais de interrupção
+	// Configura handler para sinais de término
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Monitora o processo
+	// Monitora o projeto
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			// Exibe estatísticas periódicas
+			status := crew.GetProjectStatus()
 			log.Printf("\nStatus do projeto:")
-			log.Printf("- Estratégia: %s", result.Strategy.Name)
-			log.Printf("  - Táticas: %v", result.Strategy.Tactics)
-			log.Printf("  - Canais: %v", result.Strategy.Channels)
-			log.Printf("  - KPIs: %v", result.Strategy.KPIs)
-			log.Printf("- Campanha: %s", result.Campaign.Name)
-			log.Printf("  - Descrição: %s", result.Campaign.Description)
-			log.Printf("  - Público: %s", result.Campaign.Audience)
-			log.Printf("  - Canal: %s", result.Campaign.Channel)
-			log.Printf("- Copy:")
-			log.Printf("  - Título: %s", result.Copy.Title)
-			log.Printf("  - Texto: %s", result.Copy.Body)
+			log.Printf("Progresso: %.2f%%", status.Progress)
+			log.Printf("Tarefas completadas: %d/%d", status.CompletedTasks, status.TotalTasks)
 
 		case sig := <-sigChan:
-			log.Printf("\nRecebido sinal %v, encerrando...", sig)
+			log.Printf("Recebido sinal %v, encerrando...", sig)
 			return
 		}
 	}
